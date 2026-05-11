@@ -1,0 +1,23 @@
+pkg/chaosdaemon/iptables_mode.go
+  f7313f12fcb7dec2 42-45,50,60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "56d4b6fc890ca2aaa8bd2844057ecfb49a9551dc",
+  "prompts": {
+    "f7313f12fcb7dec2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1f766ef78ffeJVQdD3t7PaqRIQ",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "Tim Bart",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 2,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
