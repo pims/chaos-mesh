@@ -18,6 +18,8 @@ package ipset
 import (
 	"context"
 	"fmt"
+	"net"
+	"strings"
 
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
@@ -32,46 +34,92 @@ import (
 
 var log = ctrl.Log.WithName("ipset")
 
-// BuildIPSets builds IP sets with provided pod ip list.
-func BuildIPSets(pods []v1.Pod, externalCidrs []v1alpha1.CidrAndPort, networkchaos *v1alpha1.NetworkChaos, namePostFix string, source string) []v1alpha1.RawIPSet {
-	netName := GenerateIPSetName(networkchaos, "net_"+namePostFix)
-	netPortName := GenerateIPSetName(networkchaos, "netport_"+namePostFix)
+// isIPv6Cidr returns true if the given CIDR string is an IPv6 CIDR.
+func isIPv6Cidr(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		// Fallback: check for colon which indicates IPv6
+		return strings.Contains(cidr, ":")
+	}
+	return ip.To4() == nil
+}
 
-	cidrs := []string{}
-	cidrAndPorts := []v1alpha1.CidrAndPort{}
+// BuildIPSets builds IP sets with provided pod ip list.
+// IPv4 and IPv6 CIDRs are split into separate ipsets because Linux ipset
+// cannot mix address families in a single hash:net or hash:net,port set.
+func BuildIPSets(pods []v1.Pod, externalCidrs []v1alpha1.CidrAndPort, networkchaos *v1alpha1.NetworkChaos, namePostFix string, source string) []v1alpha1.RawIPSet {
+	var cidrs4, cidrs6 []string
+	var cidrAndPorts4, cidrAndPorts6 []v1alpha1.CidrAndPort
 
 	for _, cidr := range externalCidrs {
 		if cidr.Port == 0 {
-			cidrs = append(cidrs, cidr.Cidr)
+			if isIPv6Cidr(cidr.Cidr) {
+				cidrs6 = append(cidrs6, cidr.Cidr)
+			} else {
+				cidrs4 = append(cidrs4, cidr.Cidr)
+			}
 		} else {
-			cidrAndPorts = append(cidrAndPorts, cidr)
+			if isIPv6Cidr(cidr.Cidr) {
+				cidrAndPorts6 = append(cidrAndPorts6, cidr)
+			} else {
+				cidrAndPorts4 = append(cidrAndPorts4, cidr)
+			}
 		}
 	}
 
 	for _, pod := range pods {
 		if len(pod.Status.PodIP) > 0 {
-			cidrs = append(cidrs, netutils.IPToCidr(pod.Status.PodIP))
+			cidr := netutils.IPToCidr(pod.Status.PodIP)
+			if isIPv6Cidr(cidr) {
+				cidrs6 = append(cidrs6, cidr)
+			} else {
+				cidrs4 = append(cidrs4, cidr)
+			}
 		}
 	}
 
-	return []v1alpha1.RawIPSet{
+	sets := []v1alpha1.RawIPSet{
 		{
-			Name:      netName,
+			Name:      GenerateIPSetName(networkchaos, "net_"+namePostFix),
 			IPSetType: v1alpha1.NetIPSet,
-			Cidrs:     cidrs,
+			Cidrs:     cidrs4,
 			RawRuleSource: v1alpha1.RawRuleSource{
 				Source: source,
 			},
 		},
 		{
-			Name:         netPortName,
+			Name:         GenerateIPSetName(networkchaos, "netport_"+namePostFix),
 			IPSetType:    v1alpha1.NetPortIPSet,
-			CidrAndPorts: cidrAndPorts,
+			CidrAndPorts: cidrAndPorts4,
 			RawRuleSource: v1alpha1.RawRuleSource{
 				Source: source,
 			},
 		},
 	}
+
+	if len(cidrs6) > 0 {
+		sets = append(sets, v1alpha1.RawIPSet{
+			Name:      GenerateIPSetName(networkchaos, "net6_"+namePostFix),
+			IPSetType: v1alpha1.NetIPSet,
+			Cidrs:     cidrs6,
+			RawRuleSource: v1alpha1.RawRuleSource{
+				Source: source,
+			},
+		})
+	}
+
+	if len(cidrAndPorts6) > 0 {
+		sets = append(sets, v1alpha1.RawIPSet{
+			Name:         GenerateIPSetName(networkchaos, "np6_"+namePostFix),
+			IPSetType:    v1alpha1.NetPortIPSet,
+			CidrAndPorts: cidrAndPorts6,
+			RawRuleSource: v1alpha1.RawRuleSource{
+				Source: source,
+			},
+		})
+	}
+
+	return sets
 }
 
 // BuildSetIPSet builds list:set IP set that stores given sets

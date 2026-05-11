@@ -72,6 +72,23 @@ func (s *DaemonServer) FlushIPSets(ctx context.Context, req *pb.IPSetsRequest) (
 	return &empty.Empty{}, nil
 }
 
+// inferIPSetFamily determines the address family from the CIDR values in an ipset.
+// Returns "inet6" for IPv6 CIDRs, empty string otherwise (ipset defaults to inet).
+func inferIPSetFamily(set *pb.IPSet) string {
+	ipSetType := v1alpha1.IPSetType(set.Type)
+	switch ipSetType {
+	case v1alpha1.NetIPSet:
+		if len(set.Cidrs) > 0 && strings.Contains(set.Cidrs[0], ":") {
+			return "inet6"
+		}
+	case v1alpha1.NetPortIPSet:
+		if len(set.CidrAndPorts) > 0 && strings.Contains(set.CidrAndPorts[0].Cidr, ":") {
+			return "inet6"
+		}
+	}
+	return ""
+}
+
 func flushIPSet(ctx context.Context, log logr.Logger, enterNS bool, pid uint32, set *pb.IPSet) error {
 	name := set.Name
 
@@ -94,9 +111,11 @@ func flushIPSet(ctx context.Context, log logr.Logger, enterNS bool, pid uint32, 
 		return errors.Errorf("unexpected IP set type: %s", ipSetType)
 	}
 
+	family := inferIPSetFamily(set)
+
 	// IP sets can't be deleted if there are iptables rules referencing them.
 	// Therefore, we create new sets and swap them.
-	if err := createIPSet(ctx, log, enterNS, pid, tmpName, ipSetType); err != nil {
+	if err := createIPSet(ctx, log, enterNS, pid, tmpName, ipSetType, family); err != nil {
 		return err
 	}
 
@@ -113,13 +132,17 @@ func flushIPSet(ctx context.Context, log logr.Logger, enterNS bool, pid uint32, 
 	return err
 }
 
-func createIPSet(ctx context.Context, log logr.Logger, enterNS bool, pid uint32, name string, ipSetType v1alpha1.IPSetType) error {
+func createIPSet(ctx context.Context, log logr.Logger, enterNS bool, pid uint32, name string, ipSetType v1alpha1.IPSetType, family string) error {
 	// ipset name cannot be longer than 31 bytes
 	if len(name) > 31 {
 		name = name[:31]
 	}
 
-	processBuilder := bpm.DefaultProcessBuilder("ipset", "create", name, string(ipSetType)).SetContext(ctx)
+	args := []string{"create", name, string(ipSetType)}
+	if family != "" {
+		args = append(args, "family", family)
+	}
+	processBuilder := bpm.DefaultProcessBuilder("ipset", args...).SetContext(ctx)
 	if enterNS {
 		processBuilder = processBuilder.SetNS(pid, bpm.NetNS)
 	}

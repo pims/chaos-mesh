@@ -185,9 +185,16 @@ func (s *DaemonServer) SetTcs(ctx context.Context, in *pb.TcsRequest) (*empty.Em
 		}
 
 		if len(filterTc) > 0 {
+			// Set up tc qdiscs and iptables (IPv4) CLASSIFY rules
 			iptablesCli := buildIptablesClient(ctx, in.EnterNS, pid)
 			if err := s.setFilterTcs(log, tcCli, iptablesCli, filterTc, device, len(globalTc)); err != nil {
 				log.Error(err, "error while setting filter tc")
+				return &empty.Empty{}, err
+			}
+			// Set up parallel ip6tables (IPv6) CLASSIFY rules pointing to the same tc bands
+			ip6tablesCli := buildIp6tablesClient(ctx, in.EnterNS, pid)
+			if err := s.setFilterIp6tables(log, ip6tablesCli, filterTc, device, len(globalTc)); err != nil {
+				log.Error(err, "error while setting ip6tables filter tc")
 				return &empty.Empty{}, err
 			}
 		}
@@ -288,6 +295,49 @@ func (s *DaemonServer) setFilterTcs(
 	}
 	if err := iptablesCli.setIptablesChains(chains); err != nil {
 		log.Error(err, "error while setting iptables")
+		return err
+	}
+
+	return nil
+}
+
+// setFilterIp6tables creates ip6tables CLASSIFY rules that mirror the iptables rules
+// created by setFilterTcs, pointing to the same tc bands. This enables IPv6 traffic
+// to be classified into the correct netem qdiscs.
+func (s *DaemonServer) setFilterIp6tables(
+	log logr.Logger,
+	ip6tablesCli iptablesClient,
+	filterTc map[string][]*pb.Tc,
+	device string,
+	baseIndex int,
+) error {
+	parent := baseIndex + 1 // mirrors the parent++ in setFilterTcs
+
+	chains := []*pb.Chain{}
+	index := 0
+	for _, tcs := range filterTc {
+		ch := &pb.Chain{
+			Name:      fmt.Sprintf("TC-TABLES-%d", index),
+			Direction: pb.Chain_OUTPUT,
+			Target:    fmt.Sprintf("CLASSIFY --set-class %d:%d", parent, index+4),
+			Device:    device,
+		}
+
+		tc := tcs[0]
+		if len(tc.Ipset) > 0 {
+			ch.Ipsets = []string{tc.Ipset}
+		}
+
+		ch.Protocol = tc.Protocol
+		ch.SourcePorts = tc.SourcePort
+		ch.DestinationPorts = tc.EgressPort
+
+		chains = append(chains, ch)
+		index++
+	}
+
+	if err := ip6tablesCli.setIptablesChains(chains); err != nil {
+		log.Error(err, "error while setting ip6tables chains")
 		return err
 	}
 

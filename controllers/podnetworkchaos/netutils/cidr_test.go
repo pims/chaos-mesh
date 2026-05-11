@@ -81,6 +81,32 @@ func TestResolveCidr(t *testing.T) {
 			args:    args{name: "1.1.1.1:foo"},
 			wantErr: true,
 		},
+		// IPv6 test cases
+		{
+			name: "ipv6 address",
+			args: args{name: "::1"},
+			want: []v1alpha1.CidrAndPort{{Cidr: "::1/128"}},
+		},
+		{
+			name: "ipv6 address with port",
+			args: args{name: "[::1]:53"},
+			want: []v1alpha1.CidrAndPort{{Cidr: "::1/128", Port: 53}},
+		},
+		{
+			name: "ipv6 full address",
+			args: args{name: "2001:db8::1"},
+			want: []v1alpha1.CidrAndPort{{Cidr: "2001:db8::1/128"}},
+		},
+		{
+			name: "ipv6 full address with port",
+			args: args{name: "[2001:db8::1]:80"},
+			want: []v1alpha1.CidrAndPort{{Cidr: "2001:db8::1/128", Port: 80}},
+		},
+		{
+			name: "ipv6 subnet",
+			args: args{name: "2001:db8::/32"},
+			want: []v1alpha1.CidrAndPort{{Cidr: "2001:db8::/32"}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,5 +119,27 @@ func TestResolveCidr(t *testing.T) {
 				t.Errorf("ResolveCidr() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveCidrDualStack(t *testing.T) {
+	// Hostname resolving to both IPv4 and IPv6
+	teardown := mock.With("LookupIP", []net.IP{
+		{1, 1, 1, 1},
+		net.ParseIP("2001:db8::1"),
+	})
+	defer teardown()
+
+	got, err := ResolveCidr("dualstack.example.com")
+	if err != nil {
+		t.Fatalf("ResolveCidr() error = %v", err)
+	}
+
+	want := []v1alpha1.CidrAndPort{
+		{Cidr: "1.1.1.1/32"},
+		{Cidr: "2001:db8::1/128"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ResolveCidr() got = %v, want %v", got, want)
 	}
 }

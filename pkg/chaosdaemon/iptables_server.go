@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	iptablesCmd = "iptables"
+	iptablesCmd  = "iptables"
+	ip6tablesCmd = "ip6tables"
 
-	iptablesChainAlreadyExistErr = "iptables: Chain already exists."
+	iptablesChainAlreadyExistErr = "Chain already exists."
 )
 
 func (s *DaemonServer) SetIptablesChains(ctx context.Context, req *pb.IptablesChainsRequest) (*empty.Empty, error) {
@@ -49,17 +50,17 @@ func (s *DaemonServer) SetIptablesChains(ctx context.Context, req *pb.IptablesCh
 		}
 	}
 
-	iptables := buildIptablesClient(ctx, req.EnterNS, pid)
-	err = iptables.initializeEnv()
-	if err != nil {
-		log.Error(err, "error while initializing iptables")
-		return nil, err
-	}
-
-	err = iptables.setIptablesChains(req.Chains)
-	if err != nil {
-		log.Error(err, "error while setting iptables chains")
-		return nil, err
+	// Initialize and set chains for both iptables (IPv4) and ip6tables (IPv6)
+	for _, cmd := range []string{iptablesCmd, ip6tablesCmd} {
+		cli := buildIptablesClientWithCmd(ctx, req.EnterNS, pid, cmd)
+		if err := cli.initializeEnv(); err != nil {
+			log.Error(err, "error while initializing iptables", "cmd", cmd)
+			return nil, err
+		}
+		if err := cli.setIptablesChains(req.Chains); err != nil {
+			log.Error(err, "error while setting iptables chains", "cmd", cmd)
+			return nil, err
+		}
 	}
 
 	return &empty.Empty{}, nil
@@ -69,6 +70,7 @@ type iptablesClient struct {
 	ctx     context.Context
 	enterNS bool
 	pid     uint32
+	cmd     string
 }
 
 type iptablesChain struct {
@@ -77,10 +79,19 @@ type iptablesChain struct {
 }
 
 func buildIptablesClient(ctx context.Context, enterNS bool, pid uint32) iptablesClient {
+	return buildIptablesClientWithCmd(ctx, enterNS, pid, iptablesCmd)
+}
+
+func buildIp6tablesClient(ctx context.Context, enterNS bool, pid uint32) iptablesClient {
+	return buildIptablesClientWithCmd(ctx, enterNS, pid, ip6tablesCmd)
+}
+
+func buildIptablesClientWithCmd(ctx context.Context, enterNS bool, pid uint32, cmd string) iptablesClient {
 	return iptablesClient{
-		ctx,
-		enterNS,
-		pid,
+		ctx:     ctx,
+		enterNS: enterNS,
+		pid:     pid,
+		cmd:     cmd,
 	}
 }
 
@@ -192,7 +203,7 @@ func (iptables *iptablesClient) initializeEnv() error {
 
 // createNewChain will cover existing chain
 func (iptables *iptablesClient) createNewChain(chain *iptablesChain) error {
-	processBuilder := bpm.DefaultProcessBuilder(iptablesCmd, "-w", "-N", chain.Name).SetContext(iptables.ctx)
+	processBuilder := bpm.DefaultProcessBuilder(iptables.cmd, "-w", "-N", chain.Name).SetContext(iptables.ctx)
 	if iptables.enterNS {
 		processBuilder = processBuilder.SetNS(iptables.pid, bpm.NetNS)
 	}
@@ -229,7 +240,7 @@ func (iptables *iptablesClient) deleteAndWriteRules(chain *iptablesChain) error 
 }
 
 func (iptables *iptablesClient) ensureRule(chain *iptablesChain, rule string) error {
-	processBuilder := bpm.DefaultProcessBuilder(iptablesCmd, "-w", "-S", chain.Name).SetContext(iptables.ctx)
+	processBuilder := bpm.DefaultProcessBuilder(iptables.cmd, "-w", "-S", chain.Name).SetContext(iptables.ctx)
 	if iptables.enterNS {
 		processBuilder = processBuilder.SetNS(iptables.pid, bpm.NetNS)
 	}
@@ -245,7 +256,7 @@ func (iptables *iptablesClient) ensureRule(chain *iptablesChain, rule string) er
 	}
 
 	// TODO: lock on every container but not on chaos-daemon's `/run/xtables.lock`
-	processBuilder = bpm.DefaultProcessBuilder(iptablesCmd, strings.Split("-w "+rule, " ")...).SetContext(iptables.ctx)
+	processBuilder = bpm.DefaultProcessBuilder(iptables.cmd, strings.Split("-w "+rule, " ")...).SetContext(iptables.ctx)
 	if iptables.enterNS {
 		processBuilder = processBuilder.SetNS(iptables.pid, bpm.NetNS)
 	}
@@ -259,7 +270,7 @@ func (iptables *iptablesClient) ensureRule(chain *iptablesChain, rule string) er
 }
 
 func (iptables *iptablesClient) flushIptablesChain(chain *iptablesChain) error {
-	processBuilder := bpm.DefaultProcessBuilder(iptablesCmd, "-w", "-F", chain.Name).SetContext(iptables.ctx)
+	processBuilder := bpm.DefaultProcessBuilder(iptables.cmd, "-w", "-F", chain.Name).SetContext(iptables.ctx)
 	if iptables.enterNS {
 		processBuilder = processBuilder.SetNS(iptables.pid, bpm.NetNS)
 	}

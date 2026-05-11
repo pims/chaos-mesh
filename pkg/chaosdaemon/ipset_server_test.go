@@ -52,7 +52,22 @@ var _ = Describe("ipset server", func() {
 				Expect(args[6]).To(Equal("hash:net"))
 				return exec.Command("echo", "mock command")
 			})()
-			err := createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet)
+			err := createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet, "")
+			Expect(err).To(BeNil())
+		})
+
+		It("should pass family inet6 for IPv6", func() {
+			defer mock.With("MockProcessBuild", func(ctx context.Context, cmd string, args ...string) *exec.Cmd {
+				Expect(cmd).To(Equal("/usr/local/bin/nsexec"))
+				Expect(args[3]).To(Equal("ipset"))
+				Expect(args[4]).To(Equal("create"))
+				Expect(args[5]).To(Equal("name6"))
+				Expect(args[6]).To(Equal("hash:net"))
+				Expect(args[7]).To(Equal("family"))
+				Expect(args[8]).To(Equal("inet6"))
+				return exec.Command("echo", "mock command")
+			})()
+			err := createIPSet(context.TODO(), logger, true, 1, "name6", v1alpha1.NetIPSet, "inet6")
 			Expect(err).To(BeNil())
 		})
 
@@ -71,7 +86,7 @@ exit 1
 			defer mock.With("MockProcessBuild", func(ctx context.Context, cmd string, args ...string) *exec.Cmd {
 				return exec.Command("/tmp/mockfail.sh", ipsetExistErr)
 			})()
-			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet)
+			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet, "")
 			Expect(err).To(BeNil())
 		})
 
@@ -86,7 +101,7 @@ exit 1
 			defer mock.With("MockProcessBuild", func(context.Context, string, ...string) *exec.Cmd {
 				return exec.Command("/tmp/mockfail.sh", "fail msg")
 			})()
-			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet)
+			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet, "")
 			Expect(err).ToNot(BeNil())
 		})
 
@@ -101,7 +116,7 @@ exit 1
 			defer mock.With("MockProcessBuild", func(context.Context, string, ...string) *exec.Cmd {
 				return exec.Command("/tmp/mockfail.sh", ipsetExistErr)
 			})()
-			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet)
+			err = createIPSet(context.TODO(), logger, true, 1, "name", v1alpha1.NetIPSet, "")
 			Expect(err).ToNot(BeNil())
 		})
 	})
